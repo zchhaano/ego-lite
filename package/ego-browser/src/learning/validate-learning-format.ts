@@ -1,12 +1,7 @@
-import { pathToFileURL } from "node:url";
-import { readFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { parse } from "acorn";
 
-import {
-  iterLearningDirs,
-  learningsRoot,
-  pathExists,
-} from "./check-domain-learning.js";
+import { iterLearningDirs, learningsRoot } from "./check-domain-learning.js";
+import { isSafeSiteRelativePath, readSiteFile } from "./safe-site-file.js";
 
 const TOOL_VALUE_TYPES = new Set([
   "string",
@@ -21,10 +16,9 @@ const TEMP_REF_RE = /(?:@\d+\b|\bref=\d+\b)/;
 export async function validateLearning(siteDir: string) {
   const errors: string[] = [];
   const siteId = siteDir.split(/[\\/]/).at(-1);
-  const manifestPath = join(siteDir, "manifest.json");
   let manifest;
   try {
-    manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    manifest = JSON.parse((await readSiteFile(siteDir, "manifest.json")).text);
   } catch (error) {
     return [`${siteId}: invalid or missing manifest.json: ${error.message}`];
   }
@@ -56,12 +50,6 @@ export async function validateLearning(siteDir: string) {
       );
       continue;
     }
-    await requireFile(
-      siteDir,
-      note,
-      `${siteId}: missing note ${JSON.stringify(note)}`,
-      errors,
-    );
     await rejectTemporaryRefs(
       siteDir,
       note,
@@ -80,34 +68,26 @@ export async function validateLearning(siteDir: string) {
     if (!schema || typeof schema !== "object" || !isNodeToolPath(schema.path)) {
       continue;
     }
-    const toolPath = join(siteDir, schema.path);
-    if (!(await pathExists(toolPath))) {
-      errors.push(
-        `${siteId}: missing Node tool file ${JSON.stringify(schema.path)} for tool ${JSON.stringify(toolName)}`,
-      );
-      continue;
-    }
-    await rejectTemporaryRefs(
+    const source = await rejectTemporaryRefs(
       siteDir,
       schema.path,
       `${siteId}: Node tool ${JSON.stringify(toolName)}`,
       errors,
     );
+    if (source === null) continue;
     try {
-      const module = await import(
-        `${pathToFileURL(toolPath).href}?validate=${Date.now()}`
-      );
+      const exportedFunctions = staticFunctionExports(source);
       if (
         typeof schema.callable === "string" &&
-        typeof module[schema.callable] !== "function"
+        !exportedFunctions.has(schema.callable)
       ) {
         errors.push(
-          `${siteId}: missing Node callable ${JSON.stringify(schema.callable)} for tool ${JSON.stringify(toolName)}`,
+          `${siteId}: Node callable ${JSON.stringify(schema.callable)} for tool ${JSON.stringify(toolName)} must be a statically declared local function export (re-exports and computed values are unsupported)`,
         );
       }
     } catch (error) {
       errors.push(
-        `${siteId}: cannot import Node tool ${JSON.stringify(schema.path)}: ${error.message}`,
+        `${siteId}: cannot parse Node tool ${JSON.stringify(schema.path)}: ${error.message}`,
       );
     }
   }
@@ -126,12 +106,6 @@ export async function validateLearning(siteDir: string) {
     ) {
       continue;
     }
-    await requireFile(
-      siteDir,
-      schema.path,
-      `${siteId}: missing browser tool file ${JSON.stringify(schema.path)} for tool ${JSON.stringify(toolName)}`,
-      errors,
-    );
     await rejectTemporaryRefs(
       siteDir,
       schema.path,
@@ -312,46 +286,23 @@ function isSafeToolName(name) {
   );
 }
 
-function isSafeRelativePath(path) {
-  if (
-    typeof path !== "string" ||
-    !path ||
-    path.includes("\\") ||
-    isAbsolute(path)
-  ) {
-    return false;
-  }
-  return path.split("/").every((part) => part && part !== "." && part !== "..");
-}
-
 function isNotePath(path) {
-  const parts = isSafeRelativePath(path) ? path.split("/") : [];
+  const parts = isSafeSiteRelativePath(path) ? path.split("/") : [];
   return parts.length === 2 && parts[0] === "notes" && parts[1].endsWith(".md");
 }
 
 function isNodeToolPath(path) {
-  const parts = isSafeRelativePath(path) ? path.split("/") : [];
+  const parts = isSafeSiteRelativePath(path) ? path.split("/") : [];
   return parts.length === 2 && parts[0] === "tools" && parts[1].endsWith(".js");
 }
 
 function isBrowserToolPath(path) {
-  const parts = isSafeRelativePath(path) ? path.split("/") : [];
+  const parts = isSafeSiteRelativePath(path) ? path.split("/") : [];
   return (
     parts.length === 2 &&
     parts[0] === "browser-tools" &&
     parts[1].endsWith(".js")
   );
-}
-
-async function requireFile(
-  siteDir: string,
-  relativePath: string,
-  message: string,
-  errors: string[],
-) {
-  if (!(await pathExists(join(siteDir, relativePath)))) {
-    errors.push(message);
-  }
 }
 
 async function rejectTemporaryRefs(
@@ -362,13 +313,79 @@ async function rejectTemporaryRefs(
 ) {
   let text;
   try {
-    text = await readFile(join(siteDir, relativePath), "utf8");
-  } catch {
-    return;
+    text = (await readSiteFile(siteDir, relativePath)).text;
+  } catch (error) {
+    errors.push(
+      `${prefix}: cannot read ${JSON.stringify(relativePath)}: ${error.message}`,
+    );
+    return null;
   }
   if (TEMP_REF_RE.test(text)) {
     errors.push(
       `${prefix}: contains temporary snapshot ref; use stable locators instead`,
     );
   }
+  return text;
+}
+
+function staticFunctionExports(source: string) {
+  const module = parse(source, { ecmaVersion: "latest", sourceType: "module" });
+  const bindings = new Set<string>();
+  const exports = new Set<string>();
+  const isFunction = (node) =>
+    node &&
+    [
+      "FunctionDeclaration",
+      "FunctionExpression",
+      "ArrowFunctionExpression",
+    ].includes(node.type);
+  for (const statement of module.body) {
+    const declaration =
+      statement.type === "ExportNamedDeclaration" ||
+      statement.type === "ExportDefaultDeclaration"
+        ? statement.declaration
+        : statement;
+    if (declaration?.type === "FunctionDeclaration" && declaration.id) {
+      bindings.add(declaration.id.name);
+    } else if (declaration?.type === "VariableDeclaration") {
+      for (const binding of declaration.declarations) {
+        if (binding.id.type === "Identifier" && isFunction(binding.init))
+          bindings.add(binding.id.name);
+      }
+    }
+  }
+  for (const statement of module.body) {
+    if (statement.type === "ExportDefaultDeclaration") {
+      if (
+        isFunction(statement.declaration) ||
+        (statement.declaration.type === "Identifier" &&
+          bindings.has(statement.declaration.name))
+      )
+        exports.add("default");
+    } else if (
+      statement.type === "ExportNamedDeclaration" &&
+      !statement.source
+    ) {
+      if (statement.declaration?.type === "FunctionDeclaration") {
+        exports.add(statement.declaration.id.name);
+      } else if (statement.declaration?.type === "VariableDeclaration") {
+        for (const binding of statement.declaration.declarations) {
+          if (binding.id.type === "Identifier" && bindings.has(binding.id.name))
+            exports.add(binding.id.name);
+        }
+      }
+      for (const specifier of statement.specifiers) {
+        if (
+          specifier.local.type === "Identifier" &&
+          bindings.has(specifier.local.name)
+        )
+          exports.add(
+            specifier.exported.type === "Identifier"
+              ? specifier.exported.name
+              : String(specifier.exported.value),
+          );
+      }
+    }
+  }
+  return exports;
 }

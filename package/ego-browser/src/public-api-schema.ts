@@ -285,10 +285,28 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   },
   {
     name: "Page.waitForEvent",
-    signature: "await page.waitForEvent(event, { timeout? })",
+    signature:
+      "await page.waitForEvent(event, { timeout?, downloadTimeout?, downloadIdleTimeout?, maxDownloadBytes? })",
     summary:
       'Wait for this Page\'s next "popup" or "download"; arm the promise before the triggering action.',
-    options: { timeout },
+    options: {
+      timeout: option(
+        "positiveMilliseconds",
+        "Maximum wait for the event to start in milliseconds; defaults to 10000.",
+      ),
+      downloadTimeout: option(
+        "positiveMilliseconds",
+        "Download only: total transfer deadline in milliseconds after it starts; defaults to 120000, maximum 2147483647.",
+      ),
+      downloadIdleTimeout: option(
+        "positiveMilliseconds",
+        "Download only: maximum time without byte progress in milliseconds; defaults to 30000, maximum 2147483647.",
+      ),
+      maxDownloadBytes: option(
+        "positiveInteger",
+        "Download only: maximum bytes reported or observed on disk; defaults to 104857600 (100 MiB), must be a safe integer. This is a polling guard, not a filesystem quota.",
+      ),
+    },
   },
   {
     name: "Download.page",

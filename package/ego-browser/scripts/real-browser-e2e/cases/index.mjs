@@ -42,6 +42,7 @@ import { pagePopupWaiterCase } from "./page-popup-waiter.mjs";
 import {
   concurrentTaskSpaceDownloadCase,
   pageDownloadCase,
+  pageDownloadLimitsCase,
   pageDownloadPrepareRoundCase,
   pagePdfViewerDownloadCase,
   pageDownloadResumeRoundCase,
@@ -163,6 +164,7 @@ export const e2eCases = [
   },
   { name: "Page popup waiter and URL diagnostic", body: pagePopupWaiterCase },
   { name: "Page download lifecycle", body: pageDownloadCase },
+  { name: "Page download resource limits", body: pageDownloadLimitsCase },
   {
     name: "Concurrent TaskSpace downloads",
     body: concurrentTaskSpaceDownloadCase,

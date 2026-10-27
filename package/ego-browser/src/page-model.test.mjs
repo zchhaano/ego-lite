@@ -4919,6 +4919,9 @@ test("Page.waitForEvent exposes a Playwright-style download object", async () =>
 
     const downloadPromise = source.waitForEvent("download", {
       timeout: 1_000,
+      downloadTimeout: 2_000,
+      downloadIdleTimeout: 500,
+      maxDownloadBytes: 4096,
     });
     await source.click("#download");
     const download = await downloadPromise;
@@ -4933,7 +4936,16 @@ test("Page.waitForEvent exposes a Playwright-style download object", async () =>
     await download.cancel();
     await download.delete();
     assert.deepEqual(calls.slice(0, 2), [
-      ["prepare", source.targetId, { timeoutMs: 1_000 }],
+      [
+        "prepare",
+        source.targetId,
+        {
+          timeoutMs: 1_000,
+          downloadTimeoutMs: 2_000,
+          downloadIdleTimeoutMs: 500,
+          maxDownloadBytes: 4096,
+        },
+      ],
       ["ready", `session:${source.targetId}`],
     ]);
     assert.deepEqual(calls.slice(-3), [

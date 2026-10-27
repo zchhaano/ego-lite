@@ -1,5 +1,5 @@
 #!/bin/sh
-#v1.5 2026.06.04 17:16
+#v1.6 2026.10.27
 
 set -eu
 
@@ -11,6 +11,9 @@ APP_BUNDLE_NAME="$APP_NAME.app"
 APP_PATH="/Applications/$APP_BUNDLE_NAME"
 USER_APP_PATH="$HOME/Applications/$APP_BUNDLE_NAME"
 EGO_BROWSER_HELPER_NAME="ego-browser"
+# Pin the vendor and application identity, not metadata supplied by a download.
+# Developer ID reported for official builds: https://github.com/citrolabs/ego-lite/issues/292
+APP_REQUIREMENT='=anchor apple generic and identifier "com.citrolabs.ego.lite" and certificate leaf[subject.OU] = "JGQLC6YQYJ" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
 
 # Temporary directories created when mounting the DMG; cleaned up on exit.
 TEMP_DIR=""
@@ -67,10 +70,16 @@ cleanup() {
 	fi
 }
 
-strip_quarantine_attributes() {
+verify_ego_lite_app() {
 	app_path="$1"
-	run_with_sudo_if_needed xattr -dr com.apple.quarantine "$app_path" \
-		>/dev/null 2>&1 || true
+	[ -d "$app_path" ] && [ ! -L "$app_path" ] ||
+		die "expected a regular app bundle at $app_path"
+	# Check all nested code and the pinned Apple Developer ID before any install or launch.
+	codesign --verify --deep --strict --verbose=2 \
+		--test-requirement="$APP_REQUIREMENT" "$app_path" ||
+		die "$APP_NAME signature or developer identity verification failed; obtain a verified release from https://lite.ego.app/"
+	spctl --assess --type execute --verbose=2 "$app_path" ||
+		die "Gatekeeper rejected $APP_NAME; installation and launch stopped without bypassing macOS security"
 }
 
 trap cleanup EXIT HUP INT TERM
@@ -110,7 +119,7 @@ find_ego_browser_in_app() {
 is_ego_lite_app() {
 	app_path="$1"
 
-	# The directory exists and contains a working ego-browser — ego lite is considered installed.
+	# Discover a candidate only. Its signature and Gatekeeper status are checked before use.
 	[ -d "$app_path" ] || return 1
 	find_ego_browser_in_app "$app_path" >/dev/null
 }
@@ -158,7 +167,8 @@ install_ego_lite() {
 	mkdir -p "$MOUNT_DIR"
 
 	log "$APP_NAME is not installed. Downloading $dmg_url ..."
-	curl -fL --retry 3 --output "$dmg_path" "$dmg_url" ||
+	curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+		-fL --retry 3 --output "$dmg_path" "$dmg_url" ||
 		die "failed to download $APP_NAME from $dmg_url"
 
 	log "Mounting installer ..."
@@ -176,17 +186,14 @@ install_ego_lite() {
 	if [ -n "$app_in_dmg" ]; then
 		staged_app="$TEMP_DIR/$APP_BUNDLE_NAME"
 
-		log "Installing $APP_NAME to $APP_PATH ..."
+		log "Staging and verifying $APP_NAME ..."
 		ditto "$app_in_dmg" "$staged_app" ||
 			die "failed to stage $APP_NAME from installer"
 		find_ego_browser_in_app "$staged_app" >/dev/null ||
 			die "installed $APP_NAME does not contain $EGO_BROWSER_HELPER_NAME"
+		verify_ego_lite_app "$staged_app"
 
-		# Strip quarantine attributes to prevent Gatekeeper from blocking the first launch.
-		log "Removing quarantine attributes from $APP_NAME ..."
-		xattr -dr com.apple.quarantine "$staged_app" \
-			>/dev/null 2>&1 || true
-
+		log "Installing verified $APP_NAME to $APP_PATH ..."
 		if [ -d "$APP_PATH" ]; then
 			run_with_sudo_if_needed rm -rf "$APP_PATH" ||
 				die "failed to replace existing $APP_PATH"
@@ -196,24 +203,15 @@ install_ego_lite() {
 		return 0
 	fi
 
-	# Fall back to pkg installer if the DMG contains a .pkg instead of an app bundle.
-	pkg_in_dmg=$(
-		find "$MOUNT_DIR" -maxdepth 2 -type f -name "*.pkg" |
-			head -n 1
-	)
-
-	if [ -n "$pkg_in_dmg" ]; then
-		log "Installing $APP_NAME package ..."
-		run_with_sudo_if_needed installer -pkg "$pkg_in_dmg" -target / ||
-			die "failed to install $APP_NAME package"
-		return 0
-	fi
-
-	die "cannot find $APP_NAME app or pkg in mounted DMG"
+	# A PKG can execute privileged installation scripts. This installer accepts only
+	# app bundles whose complete contents can be verified before installation.
+	die "cannot find $APP_NAME app in mounted DMG; PKG installers are not supported"
 }
 
 main() {
 	[ "$(uname -s)" = "Darwin" ] || die "this script only supports macOS; on Windows and other platforms install from https://lite.ego.app/"
+	require_command codesign
+	require_command spctl
 
 	# Install first if not present; otherwise use the ego-browser bundled inside the app.
 	installed_app_path=$(find_ego_lite_app || true)
@@ -224,7 +222,7 @@ main() {
 			die "$APP_NAME install completed, but app was not found"
 	fi
 
-	strip_quarantine_attributes "$installed_app_path"
+	verify_ego_lite_app "$installed_app_path"
 	cleanup
 
 	log "Launching $APP_NAME ..."

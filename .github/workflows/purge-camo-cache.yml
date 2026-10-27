@@ -1,5 +1,7 @@
 name: Purge Camo Cache
 
+permissions: {}
+
 on:
   schedule:
     - cron: '0 0 * * *'

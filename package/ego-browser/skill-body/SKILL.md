@@ -458,6 +458,14 @@ await download.saveAs("/absolute/path/report.pdf");
 `download.saveAs()` waits for completion and creates missing parent
 directories. `download.path()` returns the round-local temporary file;
 `failure()`, `cancel()`, and `delete()` manage its lifecycle. Temporary download
+files have a default 100 MiB limit, a 120-second total transfer deadline and a
+30-second deadline without byte progress. Override these with `maxDownloadBytes`,
+`downloadTimeout`, and `downloadIdleTimeout` in `waitForEvent("download", ...)`;
+time values are milliseconds. `timeout` only limits waiting for the start event.
+Limits cancel the transfer and fail the artifact; size checks use progress and
+disk polling, so they are not a hard filesystem quota. Each Page can capture one
+download at a time. A second download, unexpected filename, or ambiguous files
+fail the capture. Use separate Pages for simultaneous downloads. Temporary download
 files are removed when the SDK round is disposed, so call `saveAs()` before the
 script ends. Do not set a global download directory with raw CDP; each download
 wait configures and restores only the addressed Page session.

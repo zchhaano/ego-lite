@@ -61,8 +61,10 @@ import {
 } from "./driver/page-input.js";
 import {
   preparePageDownload,
+  validateDownloadOptions,
   type DownloadArtifact,
   type DownloadInterception,
+  type DownloadOptions,
 } from "./driver/downloads.js";
 import {
   PageKeyboardController,
@@ -219,6 +221,9 @@ type PageWaitForFileChooserOptions = {
 
 type PageWaitForEventOptions = {
   timeout?: number;
+  downloadTimeout?: number;
+  downloadIdleTimeout?: number;
+  maxDownloadBytes?: number;
 };
 
 type PageWaitForFunctionOptions = {
@@ -390,7 +395,7 @@ type PageModelServices = {
   ): () => void;
   prepareDownload(
     targetId: string,
-    options: { timeoutMs: number },
+    options: DownloadOptions,
   ): DownloadInterception;
   now(): number;
   sleep(ms: number): Promise<void>;
@@ -1795,7 +1800,29 @@ class Page {
     }
     validatePublicApiOptions("Page.waitForEvent", options);
     const timeoutMs = options.timeout ?? 10_000;
-    if (event === "download") return this.#waitForDownload(timeoutMs);
+    if (event === "download") {
+      const downloadOptions: DownloadOptions = {
+        timeoutMs,
+        ...(options.downloadTimeout !== undefined
+          ? { downloadTimeoutMs: options.downloadTimeout }
+          : {}),
+        ...(options.downloadIdleTimeout !== undefined
+          ? { downloadIdleTimeoutMs: options.downloadIdleTimeout }
+          : {}),
+        ...(options.maxDownloadBytes !== undefined
+          ? { maxDownloadBytes: options.maxDownloadBytes }
+          : {}),
+      };
+      validateDownloadOptions(downloadOptions);
+      return this.#waitForDownload(downloadOptions);
+    }
+    if (
+      options.downloadTimeout !== undefined ||
+      options.downloadIdleTimeout !== undefined ||
+      options.maxDownloadBytes !== undefined
+    ) {
+      throw new TypeError("download limits only apply to the download event");
+    }
 
     // Subscribe synchronously so the common `const pending = waitForEvent();
     // await click()` pattern cannot miss a popup created by the click.
@@ -1843,7 +1870,7 @@ class Page {
     });
   }
 
-  #waitForDownload(timeoutMs: number): Promise<Download> {
+  #waitForDownload(options: DownloadOptions): Promise<Download> {
     if (this.#pendingDownload || this.#activeDownload) {
       throw new Error("this Page already has an active download wait");
     }
@@ -1851,9 +1878,10 @@ class Page {
       arm: (async () => {
         const page = await this.#resolve();
         return this.#services.gate.withPage(page, async ({ sessionId }) => {
-          const interception = this.#services.prepareDownload(page.targetId, {
-            timeoutMs,
-          });
+          const interception = this.#services.prepareDownload(
+            page.targetId,
+            options,
+          );
           try {
             await interception.ready(sessionId);
             return { page, interception };

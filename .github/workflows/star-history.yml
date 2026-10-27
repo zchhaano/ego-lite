@@ -14,11 +14,10 @@ on:
         type: boolean
         default: false
 
-# The stargazers API needs metadata:read + contents:write since GitHub's
-# 2026-06-30 restriction. The built-in token with contents:write covers both,
-# so no PAT is involved. contents:write is also what pushes CHART_BRANCH.
+# The aggregate /stargazers/history API needs only metadata:read. The
+# third-party renderer has no write token; only the separate publisher does.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: star-history
@@ -35,10 +34,15 @@ env:
   CHART_DIR: assets/star-history
 
 jobs:
-  star-history:
+  render:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      changed: ${{ steps.chart.outputs.changed }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # render-charts.sh decides "changed" by comparing .star-history.sig, and
       # falls back to the existing chart when the stargazers API rate-limits it.
@@ -49,10 +53,10 @@ jobs:
           set -euo pipefail
           mkdir -p "$CHART_DIR"
           if git fetch --depth=1 origin "$CHART_BRANCH"; then
-            git archive FETCH_HEAD | tar -x -C "$CHART_DIR"
-            # Branch-local docs, not chart data; keep it out of the render dir.
-            rm -f "$CHART_DIR/README.md"
-            ls -la "$CHART_DIR"  # -a: .star-history.sig matters here
+            # Restore only data files, never Git configuration or executable files.
+            for name in star-history-light.svg star-history-dark.svg star-history.png .star-history.sig; do
+              git show "FETCH_HEAD:$name" > "$CHART_DIR/$name" || rm -f "$CHART_DIR/$name"
+            done
           else
             echo "No $CHART_BRANCH yet; this run creates it."
           fi
@@ -64,18 +68,20 @@ jobs:
       # for the same reason: the README already carries absolute CHART_BRANCH
       # URLs, which the action's relative-path rewrite would undo.
       - name: Check out pinned chart renderer
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: narayann7/star-history-action
           ref: a68d8f9d67ca20d55b682a264e69152dcf326e9c
           path: .star-history-action
           persist-credentials: false
 
-      - name: Apply renderer axis and Action runtime fixes
+      - name: Apply renderer axis, aggregate API and Action runtime fixes
         run: |
           git -C .star-history-action apply \
             "$GITHUB_WORKSPACE/.github/star-history/y-axis.patch" \
-            "$GITHUB_WORKSPACE/.github/star-history/action-runtime.patch"
+            "$GITHUB_WORKSPACE/.github/star-history/action-runtime.patch" \
+            "$GITHUB_WORKSPACE/.github/star-history/aggregate-history.patch"
+          cp .github/star-history/repo-data.mjs .star-history-action/renderer/
 
       - id: chart
         uses: ./.star-history-action
@@ -104,24 +110,52 @@ jobs:
         if: steps.chart.outputs.changed == 'true' || inputs.force
         run: python3 .github/star-history/postprocess-svg.py "$CHART_DIR"
 
-      # A fresh orphan commit force-pushed over CHART_BRANCH: the branch stays
-      # one commit deep, so a daily 130 KB of regenerated binaries never turns
-      # into a growing history. No rule guards a non-default branch, so this
-      # needs no review and cannot be declined the way the old push to main was.
-      - name: Publish chart to CHART_BRANCH
+      - name: Upload chart data
         if: steps.chart.outputs.changed == 'true' || inputs.force
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: star-history-chart
+          path: |
+            assets/star-history/star-history-light.svg
+            assets/star-history/star-history-dark.svg
+            assets/star-history/star-history.png
+            assets/star-history/.star-history.sig
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: render
+    if: (needs.render.outputs.changed == 'true' || inputs.force) && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      # No renderer, npm install or generated script runs in this job. Checkout
+      # credentials are not persisted; only the final push receives the token.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: star-history-chart
+          path: chart-artifact
+      - name: Stage validated chart data
         run: |
           set -euo pipefail
-          work="$(mktemp -d)"
-          cp "$CHART_DIR"/star-history-*.svg \
-             "$CHART_DIR"/star-history.png \
-             "$CHART_DIR"/.star-history.sig \
-             "$work/"
-          cp .github/star-history/branch-readme.md "$work/README.md"
+          mkdir "$RUNNER_TEMP/chart-publish"
+          python3 .github/star-history/stage-chart.py chart-artifact "$RUNNER_TEMP/chart-publish"
+          cp .github/star-history/branch-readme.md "$RUNNER_TEMP/chart-publish/README.md"
+      # A fresh orphan commit keeps the data branch one commit deep.
+      - name: Publish chart to CHART_BRANCH
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/chart-publish"
           git init -q -b "$CHART_BRANCH" "$work"
-          git -C "$work" add -A
+          git -C "$work" add -- star-history-light.svg star-history-dark.svg star-history.png .star-history.sig README.md
           git -C "$work" \
             -c user.name='github-actions[bot]' \
             -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
@@ -130,7 +164,3 @@ jobs:
             "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
             "$CHART_BRANCH"
           echo "Pushed $(git -C "$work" rev-parse --short HEAD) to $CHART_BRANCH."
-          # No cache purge needed: GitHub does not camo-proxy
-          # raw.githubusercontent.com, it serves these URLs verbatim with
-          # cache-control max-age=300, so the README picks the new chart up
-          # within five minutes. Verified against the rendered README.

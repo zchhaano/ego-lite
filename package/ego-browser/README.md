@@ -57,6 +57,26 @@ Site learnings under `agentWorkspace()/learnings/<site>/` are always active and 
 npm run validate:site-skills
 ```
 
+Validation parses manifests and JavaScript exports without executing site tools.
+Learning files must be regular files within their site directory, with no
+symlinks and at most 1 MiB each. Executing a Node site tool still runs trusted
+code with the agent process's permissions; keep installed learning directories
+trusted and stable.
+
+## Download limits
+
+Arm `page.waitForEvent("download", options)` before the triggering action.
+`timeout` limits the wait for the start event. Transfers default to a 120-second
+total deadline, 30 seconds without byte progress and 100 MiB. Override these
+with `downloadTimeout`, `downloadIdleTimeout` (milliseconds) and
+`maxDownloadBytes`. Each Page captures one download at a time; extra downloads,
+unexpected filenames and ambiguous temporary files fail the capture. Separate
+Pages can download concurrently. Limits use CDP progress and filesystem polling,
+so bytes can exceed the configured threshold before cancellation; this is not an
+OS disk quota. Native cancellation failures cannot guarantee a browser transfer
+has stopped, but local artifact promises still settle and temporary files are
+removed where possible. Save successful artifacts before the SDK round ends.
+
 ## Source layout
 
 ```
