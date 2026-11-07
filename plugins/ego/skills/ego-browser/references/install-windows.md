@@ -54,5 +54,5 @@ Then return to the user's original task, as `install.md` describes.
 
 ## Troubleshooting
 
-- **SmartScreen blocks the installer**: have the user choose "More info" and then "Run anyway" in the SmartScreen dialog.
+- **SmartScreen blocks the installer**: stop and verify the download and publisher with the official website; obtain a corrected release if its signature or reputation cannot be confirmed.
 - **Command still unavailable after onboarding**: open a new terminal first, because an existing one keeps the PATH it started with. Otherwise have the user reopen ego lite, finish onboarding, and retry.

@@ -54,6 +54,17 @@ export async function startFixtureServer(taskName) {
       res.end("server text fixture");
       return;
     }
+    if (url.pathname === "/api/download-stalled") {
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-disposition": 'attachment; filename="stalled.txt"',
+        "cache-control": "no-store",
+      });
+      res.write("partial");
+      const timer = setTimeout(() => res.end("finished"), 10_000);
+      res.on("close", () => clearTimeout(timer));
+      return;
+    }
     if (url.pathname === "/api/download") {
       const requestedSpace = url.searchParams.get("space");
       const space =

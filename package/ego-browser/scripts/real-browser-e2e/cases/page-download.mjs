@@ -52,6 +52,39 @@ export function pageDownloadCase() {
   `;
 }
 
+export function pageDownloadLimitsCase() {
+  return `
+    const task = await taskSpace(taskName);
+    const page = await newPageAt(task, baseUrl + "/?page=download-limits");
+    try {
+      for (const fixture of [
+        { path: "/api/download", options: { maxDownloadBytes: 4 }, expected: "maxDownloadBytes" },
+        { path: "/api/download-stalled", options: { downloadTimeout: 500, downloadIdleTimeout: 5_000 }, expected: "timed out" },
+        { path: "/api/download-stalled", options: { downloadTimeout: 5_000, downloadIdleTimeout: 500 }, expected: "inactive" },
+      ]) {
+        await page.evaluate((url) => {
+          document.querySelector("#limited-download")?.remove();
+          const link = document.createElement("a");
+          link.id = "limited-download";
+          link.href = url;
+          link.textContent = "Download bounded fixture";
+          document.body.append(link);
+        }, baseUrl + fixture.path);
+        const pending = page.waitForEvent("download", { timeout: 10_000, ...fixture.options });
+        await page.click("#limited-download");
+        const download = await pending;
+        assertIncludes(await download.failure(), fixture.expected, "the configured download limit fails the transfer");
+        let rejected = false;
+        try { await download.path(); } catch { rejected = true; }
+        assert(rejected, "a failed download exposes no file");
+        await download.delete();
+      }
+    } finally {
+      await page.close();
+    }
+  `;
+}
+
 export function concurrentTaskSpaceDownloadCase() {
   return `
     let firstTask;

@@ -1,5 +1,7 @@
 name: Main PR Source
 
+permissions: {}
+
 on:
   pull_request:
     branches:

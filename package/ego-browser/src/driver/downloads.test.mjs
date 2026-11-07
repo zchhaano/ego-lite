@@ -227,7 +227,7 @@ test("cancel scopes the download guid to its browser context", async () => {
   const download = await interception.event;
 
   await download.cancel();
-  services.listeners.get("target-1")({
+  services.listeners.get("target-1")?.({
     method: "Page.downloadProgress",
     params: { guid: "guid-cancel", state: "canceled" },
   });

@@ -1,7 +1,8 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { agentWorkspace } from "../env.js";
+import { readSiteFile } from "./safe-site-file.js";
 
 export interface ToolArgSchema {
   type: string;
@@ -148,7 +149,7 @@ export async function loadLearningManifest(
 ): Promise<LearningManifest> {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(await readFile(join(siteDir, "manifest.json"), "utf8"));
+    parsed = JSON.parse((await readSiteFile(siteDir, "manifest.json")).text);
   } catch (error) {
     throw new Error(
       `site skill ${JSON.stringify(siteDir)} has invalid or missing manifest.json: ${error.message}`,
@@ -172,7 +173,9 @@ export function learningEntry(
     name: manifest.name || manifest.id || siteDir.split(/[\\/]/).at(-1),
     path: siteDir,
     domains: Array.isArray(manifest.domains) ? [...manifest.domains] : [],
-    notes: notes.map((note) => join(siteDir, note)),
+    notes: notes
+      .filter((note) => typeof note === "string")
+      .map((note) => join(siteDir, note)),
     nodeTools: toolSchemasNode(manifest),
     browserTools: toolSchemasBrowser(manifest),
   };

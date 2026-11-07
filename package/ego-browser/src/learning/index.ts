@@ -1,6 +1,7 @@
 import { pathToFileURL } from "node:url";
-import { readFile } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { relative, resolve, sep } from "node:path";
+
+import { readSiteFile } from "./safe-site-file.js";
 
 import {
   iterLearningDirs,
@@ -64,7 +65,12 @@ export async function loadLearnedContext(
       }
       let content: string;
       try {
-        content = await readFile(notePath, "utf8");
+        content = (
+          await readSiteFile(
+            entry.path,
+            relative(entry.path, notePath).split(sep).join("/"),
+          )
+        ).text;
       } catch {
         continue;
       }
@@ -147,16 +153,16 @@ export async function runNodeSiteTool(
       `Node tool ${JSON.stringify(toolName)} is not declared by site skill ${JSON.stringify(siteId)}`,
     );
   }
-  const toolPath = relativeSitePath(siteDir, schema.path, "Node tool");
-  const module = await import(
-    `${pathToFileURL(toolPath).href}?t=${Date.now()}`
-  );
   const callableName = schema.callable;
   if (typeof callableName !== "string" || !callableName.trim()) {
     throw new Error(
       `Node tool ${JSON.stringify(toolName)} must declare a callable`,
     );
   }
+  const { path: toolPath } = await readSiteFile(siteDir, schema.path);
+  const module = await import(
+    `${pathToFileURL(toolPath).href}?t=${Date.now()}`
+  );
   const tool = module[callableName];
   if (typeof tool !== "function") {
     throw new Error(
@@ -178,8 +184,7 @@ export async function loadBrowserToolSource(
       `browser tool ${JSON.stringify(toolName)} is not declared by site skill ${JSON.stringify(siteId)}`,
     );
   }
-  const toolPath = relativeSitePath(siteDir, schema.path, "browser tool");
-  return readFile(toolPath, "utf8");
+  return (await readSiteFile(siteDir, schema.path)).text;
 }
 
 export function wrapBrowserTool(source, args: any = {}) {
@@ -204,25 +209,4 @@ function toolSchemas(manifest, key) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? { ...value }
     : {};
-}
-
-function relativeSitePath(siteDir, manifestPath, label) {
-  if (typeof manifestPath !== "string" || !manifestPath.trim()) {
-    throw new Error(`${label} path must be a non-empty relative path`);
-  }
-  if (
-    manifestPath.includes("\\") ||
-    isAbsolute(manifestPath) ||
-    manifestPath.split("/").includes("..")
-  ) {
-    throw new Error(
-      `${label} path must be relative to the site skill directory`,
-    );
-  }
-  const resolved = resolve(siteDir, manifestPath);
-  const siteRoot = resolve(siteDir);
-  if (resolved !== siteRoot && !resolved.startsWith(`${siteRoot}/`)) {
-    throw new Error(`${label} path must stay inside the site skill directory`);
-  }
-  return resolved;
 }

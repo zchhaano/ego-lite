@@ -490,10 +490,14 @@ await download.saveAs("/absolute/path/report.pdf");
 
 `download.saveAs()` waits for completion and creates missing parent
 directories. `download.path()` returns the round-local temporary file;
-`failure()`, `cancel()`, and `delete()` manage its lifecycle. Temporary download
-files are removed when the SDK round is disposed, so call `saveAs()` before the
-script ends. Do not set a download directory with raw CDP; the download wait
-manages the browser's single shared download setting.
+`failure()`, `cancel()`, and `delete()` manage its lifecycle. Downloads default
+to a 100 MiB limit (`maxDownloadBytes`), 120s transfer deadline
+(`downloadTimeout`), and 30s idle deadline (`downloadIdleTimeout`); `timeout`
+only limits waiting for the start event. Each Page captures one download at a
+time (use separate Pages for concurrent downloads). Temporary files are removed
+when the SDK round is disposed, so call `saveAs()` before the script ends. Do
+not set a download directory with raw CDP; the download wait manages the
+browser's single shared download setting.
 
 `page.fetch()` runs `window.fetch()` in the Page: relative URLs, cookies, and
 service workers use that Page, and browser CORS still applies. It returns

@@ -1,0 +1,9 @@
+diff --git a/renderer/render.ts b/renderer/render.ts
+--- a/renderer/render.ts
++++ b/renderer/render.ts
+@@ -25,3 +25,4 @@
+ import XYChart from "./vendor/shared/packages/xy-chart";
+-import { convertDataToChartData, getRepoData } from "./vendor/shared/common/chart";
++import { convertDataToChartData } from "./vendor/shared/common/chart";
++import { getRepoData } from "./repo-data.mjs";
+ import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
