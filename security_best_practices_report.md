@@ -4,11 +4,11 @@
 
 ## 修复记录（2026-10-27）
 
-SEC-01 至 SEC-06 的仓库内修复已实现，尚未提交或发布。下面的原始发现和 PoC 输出保留作为修复前证据；其中原始行号对应基准提交，当前实现请看本表链接。
+SEC-01 至 SEC-06 的首轮仓库修复已提交并推送为 `b2ce0f5`。本报告另补充了下述 Finder 元数据兼容性修复。下面的原始发现和 PoC 输出保留作为修复前证据；其中原始行号对应基准提交，当前实现请看本表链接。
 
 | 项目 | 当前实现 |
 | --- | --- |
-| SEC-01 | [安装脚本](skills/ego-browser/scripts/install.sh)在安装及启动前验证完整签名、固定 Apple Developer ID `JGQLC6YQYJ`、bundle ID `com.citrolabs.ego.lite` 和 Gatekeeper；保留隔离属性，仅允许 HTTPS 下载及重定向，拒绝 PKG 分支。 |
+| SEC-01 | [安装脚本](skills/ego-browser/scripts/install.sh)仅在临时下载副本上清理 Finder 元数据，再于安装及启动前验证完整签名、固定 Apple Developer ID `JGQLC6YQYJ`、bundle ID `com.citrolabs.ego.lite` 和 Gatekeeper；保留隔离属性，仅允许 HTTPS 下载及重定向，拒绝 PKG 分支。 |
 | SEC-02 | [静态校验](package/ego-browser/src/learning/validate-learning-format.ts)只解析 JSON 和 Acorn AST，不再导入模块；只接受可静态识别的本地函数导出，不支持重导出或动态计算的 callable。 |
 | SEC-03 | [统一文件读取](package/ego-browser/src/learning/safe-site-file.ts)限制真实路径、普通文件及每文件 1 MiB，拒绝站点根、子目录和文件软链接；使用 `O_NOFOLLOW`、文件身份检查及有界读取。清单、笔记和工具入口共同使用。 |
 | SEC-04 | [下载实现](package/ego-browser/src/driver/downloads.ts)要求唯一下载及匹配文件名，拒绝第二个 GUID、不明文件、软链接及多个临时文件；恢复页面策略期间也继续取消新出现的 GUID。保留不同 Page 并发下载与缺少最终进度事件时的文件检查。 |
@@ -17,7 +17,13 @@ SEC-01 至 SEC-06 的仓库内修复已实现，尚未提交或发布。下面�
 
 **验证与限制：** 新增安装器、学习包、下载和 CI 边界行为测试；安全测试先在修复前失败，再验证修复后的拒绝行为。全量测试、格式、类型、学习包及 CI 本地检查的最终结果记录于实施计划。已加入真实浏览器下载资源限制用例并尝试运行下载生命周期、资源限制、跨 TaskSpace 并发三项 E2E，但当前环境缺少 `ego-browser`，三项均未能启动，浏览器断言数为 0；不算通过。未运行线上工作流或发布。
 
-**实际安装包兼容性：** 对官方 ARM64 DMG 进行了只读下载、挂载及临时 staging 验证，未安装、启动或移除安全属性。所取得应用版本为 `0.6.1.13`，DMG SHA-256 为 `56c415ce29cd68250e83de31eda5f659564edaf58d204eadad6d43b6b9fa6817`。其 Apple 开发者身份为 `CITRO LABS PTE. LIMITED (JGQLC6YQYJ)`，bundle ID 符合预期，Gatekeeper 接受；但严格深度签名检查因嵌套组件的 `com.apple.FinderInfo` 失败，正常 `ditto` staging 后仍失败。修复后的安装器会拒绝此包，需发布方提供通过验证的发行物。上述摘要仅记录所检查样本，并非新增的可信发布清单。
+**实际安装包兼容性：** 对官方 ARM64 DMG 进行了只读下载、挂载及临时 staging 验证。所取得应用版本为 `0.6.1.13`，DMG SHA-256 为 `56c415ce29cd68250e83de31eda5f659564edaf58d204eadad6d43b6b9fa6817`。其 Apple 开发者身份为 `CITRO LABS PTE. LIMITED (JGQLC6YQYJ)`，bundle ID 符合预期，Gatekeeper 接受；但严格深度签名检查因嵌套组件的 `com.apple.FinderInfo` 失败，正常 `ditto` staging 后仍失败。首轮安装器会拒绝此包。上述摘要仅记录所检查样本，并非新增的可信发布清单。
+
+**后续根因验证与修正：** 对同一 DMG 再次检查，在副本中发现 1357 处 FinderInfo、0 处 ResourceFork。仅清理副本的 FinderInfo 后，原始开发者签名、完整严格验证、固定发布者要求均通过，Gatekeeper 返回 `accepted / Notarized Developer ID`。因此先前“只能等待发布方修复”的结论需要修正：本地可以只规范化临时副本的 Finder 元数据，再完整验证原始签名。[Apple QA1940](https://developer.apple.com/library/archive/qa/qa1940/_index.html)说明了此类元数据与签名错误的关系。
+
+安装器 v1.7 在临时下载副本上执行 `xattr -r -s -d com.apple.FinderInfo`；`-s` 避免跟随符号链接，保留隔离属性、ResourceFork 和原代码签名，不修改现有安装。任何后续完整签名、发布者或 Gatekeeper 失败仍停止。新增回归覆盖正常化后签名失败仍拒绝、现有应用不被修改，以及原生 xattr 的隔离属性/外部链接保护；15 项安装安全测试已通过。发布方仍应从构建产物中移除这些元数据，避免普通用户遇到兼容性问题。
+
+**实际安装结果：** 按用户授权重新执行 v1.7 脚本，退出码为 0，应用已安装至 `/Applications/ego lite.app` 并启动。暂存副本及安装后的应用均通过原始签名、固定发布者要求和 Gatekeeper，后者返回 `source=Notarized Developer ID`。安装临时文件已清理。此轮全量 `npm test` 为 570/570 通过，格式检查和独立安全复核通过；首次引导及后续真实浏览器运行验证仍待用户完成引导后进行。
 
 **仍然存在的边界：** 这些修复不能审计或约束闭源浏览器和原生桥接。显式运行 Node 站点工具及其 imports 仍是可信代码执行；同用户可持续修改的目录不是沙箱，学习包需来自可信、稳定的目录。下载字节检查是进度与磁盘轮询防护，不能提供操作系统硬配额；原生取消或恢复失败会报告错误，但无法保证失去响应的浏览器已停止传输。SVG 检查约束发布文件，不是 SVG 内容净化器。
 

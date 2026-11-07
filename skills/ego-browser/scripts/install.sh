@@ -1,5 +1,5 @@
 #!/bin/sh
-#v1.6 2026.10.27
+#v1.7 2026.10.27
 
 set -eu
 
@@ -156,6 +156,7 @@ find_ego_lite_app() {
 install_ego_lite() {
 	require_command curl
 	require_command hdiutil
+	require_command xattr
 
 	# Download and mount the DMG in an isolated temp directory to avoid polluting the CWD.
 	temp_base_dir=${TMPDIR:-/tmp}
@@ -191,6 +192,12 @@ install_ego_lite() {
 			die "failed to stage $APP_NAME from installer"
 		find_ego_browser_in_app "$staged_app" >/dev/null ||
 			die "installed $APP_NAME does not contain $EGO_BROWSER_HELPER_NAME"
+		# Apple QA1940: Finder metadata can invalidate an otherwise intact bundle.
+		# Normalize only the disposable copy, without following symlinks or deleting
+		# quarantine/resource forks. Original signatures still have to pass below.
+		log "Removing staged Finder metadata while preserving quarantine ..."
+		xattr -r -s -d com.apple.FinderInfo "$staged_app" ||
+			die "failed to normalize staged Finder metadata"
 		verify_ego_lite_app "$staged_app"
 
 		log "Installing verified $APP_NAME to $APP_PATH ..."

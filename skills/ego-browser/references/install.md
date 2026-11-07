@@ -21,6 +21,7 @@ If `upgrade` is also an unknown command, reinstall with the steps below. Then co
 The install script lives at `scripts/install.sh` in this skill and supports macOS only. It will:
 
 - Download the ego lite installer (a DMG) for your CPU architecture (arm64 / x64), using HTTPS for the request and all redirects.
+- Remove only `com.apple.FinderInfo` metadata from the temporary staged copy, without following symbolic links. This handles packaging metadata described in [Apple QA1940](https://developer.apple.com/library/archive/qa/qa1940/_index.html); quarantine attributes and original code signatures are preserved.
 - Verify the app's complete code signature, the pinned Citro Labs Developer ID (`JGQLC6YQYJ`), bundle ID (`com.citrolabs.ego.lite`), and Gatekeeper acceptance before installing it to `/Applications`.
 - Preserve quarantine attributes and verify the installed app again before launch. A failed check stops installation or launch.
 
@@ -107,5 +108,6 @@ Once the environment is ready, return to the user's original task: run `ego-brow
 - **Not macOS**: `scripts/install.sh` supports macOS only (`uname -s` is `Darwin`). On Windows and other platforms, have the user download and install from the ego lite website at https://lite.ego.app/.
 - **Download failed**: the script retries 3 times automatically; if it still fails, it's usually a network issue — have the user check their network and retry.
 - **Signature, identity, or Gatekeeper check fails (macOS)**: stop and obtain a corrected release from the official website or contact the publisher. Do not remove quarantine, disable Gatekeeper, or bypass the failed check.
+- **`resource fork, Finder information, or similar detritus not allowed` (macOS)**: the current script already normalizes Finder metadata on downloaded staging copies and then reruns full verification. Existing installed apps are verified without modification; if one fails, obtain a fresh verified release. Resource forks or any remaining signature errors still stop installation.
 - **SmartScreen blocks the installer (Windows)**: stop and verify the download and publisher with the official website; obtain a corrected release if its signature or reputation cannot be confirmed.
 - **Command still unavailable after onboarding**: on macOS and Linux, confirm `~/.local/bin` is on the PATH (see above). On Windows, open a new terminal first, because an existing one keeps the PATH it started with. Otherwise have the user reopen ego lite, finish onboarding, and retry.

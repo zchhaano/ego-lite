@@ -27,6 +27,7 @@ async function runInstaller(
     bundle = "com.citrolabs.ego.lite",
     gatekeeper = true,
     pkg = false,
+    finderInfo = false,
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "ego-install-test-"));
@@ -46,7 +47,14 @@ async function runInstaller(
   await chmod(join(fixture, "Contents", "ego-browser"), 0o755);
   await writeFile(
     join(fixture, "security.json"),
-    JSON.stringify({ valid, team, bundle, gatekeeper }),
+    JSON.stringify({
+      valid,
+      team,
+      bundle,
+      gatekeeper,
+      finderInfo,
+      quarantine: "preserved",
+    }),
   );
   // Redirect only the fixed deployment paths. All installer control flow and native
   // command arguments are exercised unchanged, without touching real applications.
@@ -84,12 +92,19 @@ else if (command === 'codesign') {
   const requirement = args.find(value => value.startsWith('--test-requirement=')) || args[args.indexOf('-R') + 1] || '';
   if (!args.includes('--verify') || !args.includes('--deep') || !args.includes('--strict')) fail();
   if (!requirement.includes('anchor apple generic') || !requirement.includes('identifier "com.citrolabs.ego.lite"') || !requirement.includes('certificate leaf[subject.OU] = "JGQLC6YQYJ"')) fail();
-  if (!data.valid || data.team !== 'JGQLC6YQYJ' || data.bundle !== 'com.citrolabs.ego.lite') fail();
+  if (data.finderInfo || !data.valid || data.team !== 'JGQLC6YQYJ' || data.bundle !== 'com.citrolabs.ego.lite') fail();
 } else if (command === 'spctl') {
   if (!args.includes('--assess') || args[args.indexOf('--type') + 1] !== 'execute') fail();
   if (!JSON.parse(fs.readFileSync(path.join(args.at(-1), 'security.json'))).gatekeeper) fail();
 } else if (command === 'mv') fs.renameSync(args[0], args[1]);
-else if (['sudo', 'installer', 'xattr'].includes(command)) process.exit(97);
+else if (command === 'xattr') {
+  if (JSON.stringify(args.slice(0, 4)) !== JSON.stringify(['-r', '-s', '-d', 'com.apple.FinderInfo'])) process.exit(97);
+  const file = path.join(args.at(-1), 'security.json');
+  const data = JSON.parse(fs.readFileSync(file));
+  data.finderInfo = false;
+  fs.writeFileSync(file, JSON.stringify(data));
+}
+else if (['sudo', 'installer'].includes(command)) process.exit(97);
 `,
   );
   await chmod(driver, 0o755);
@@ -123,7 +138,13 @@ else if (['sudo', 'installer', 'xattr'].includes(command)) process.exit(97);
     .trim()
     .split("\n")
     .map(JSON.parse);
-  return { ...result, calls };
+  let installedSecurity;
+  try {
+    installedSecurity = JSON.parse(
+      await readFile(join(apps, "ego lite.app", "security.json"), "utf8"),
+    );
+  } catch {}
+  return { ...result, calls, installedSecurity };
 }
 
 for (const existing of [false, true]) {
@@ -138,7 +159,7 @@ for (const existing of [false, true]) {
       assert.notEqual(result.status, 0, result.stderr);
       assert.equal(
         result.calls.some(({ command }) =>
-          ["open", "mv", "sudo", "installer", "xattr"].includes(command),
+          ["open", "mv", "sudo", "installer"].includes(command),
         ),
         false,
       );
@@ -163,7 +184,7 @@ test("installer verifies a downloaded app before moving it and verifies it again
         "sudo",
       ].includes(command),
     ),
-    ["codesign", "spctl", "mv", "codesign", "spctl", "open"],
+    ["xattr", "codesign", "spctl", "mv", "codesign", "spctl", "open"],
   );
   const curl = result.calls.find(({ command }) => command === "curl").args;
   assert.equal(curl[curl.indexOf("--proto") + 1], "=https");
@@ -189,3 +210,94 @@ test("installer rejects a PKG-only disk image without running installer or sudo"
     false,
   );
 });
+
+test("downloaded Finder metadata is normalized while quarantine and original signature checks remain", async (t) => {
+  const result = await runInstaller(t, { finderInfo: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.installedSecurity.finderInfo, false);
+  assert.equal(result.installedSecurity.quarantine, "preserved");
+  assert.equal(
+    result.calls.filter(({ command }) => command === "codesign").length,
+    2,
+  );
+  const normalization = result.calls.find(({ command }) => command === "xattr");
+  assert.deepEqual(normalization.args.slice(0, 4), [
+    "-r",
+    "-s",
+    "-d",
+    "com.apple.FinderInfo",
+  ]);
+});
+
+test("removing Finder metadata cannot rescue an invalid original signature", async (t) => {
+  const result = await runInstaller(t, { finderInfo: true, valid: false });
+  assert.notEqual(result.status, 0, result.stderr);
+  assert.equal(
+    result.calls.some(({ command }) =>
+      ["open", "mv", "sudo"].includes(command),
+    ),
+    false,
+  );
+});
+
+test("existing apps are rejected without changing their Finder metadata", async (t) => {
+  const result = await runInstaller(t, { existing: true, finderInfo: true });
+  assert.notEqual(result.status, 0, result.stderr);
+  assert.equal(
+    result.calls.some(({ command }) =>
+      ["xattr", "open", "mv"].includes(command),
+    ),
+    false,
+  );
+});
+
+test(
+  "native Finder metadata cleanup preserves quarantine and does not follow external links",
+  { skip: process.platform !== "darwin" },
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "ego-finder-metadata-test-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const app = join(root, "staged.app");
+    await mkdir(app);
+    const inside = join(app, "inside");
+    const outside = join(root, "outside");
+    await writeFile(inside, "synthetic app data");
+    await writeFile(outside, "synthetic external data");
+    await symlink(outside, join(app, "external-link"));
+    const xattr = (...args) =>
+      spawnSync("/usr/bin/xattr", args, { encoding: "utf8" });
+    const finder =
+      "0000000000000000400000000000000000000000000000000000000000000000";
+    for (const path of [inside, outside])
+      assert.equal(
+        xattr("-w", "-x", "com.apple.FinderInfo", finder, path).status,
+        0,
+      );
+    assert.equal(
+      xattr("-w", "com.apple.quarantine", "0081;00000000;Diagnostic;", inside)
+        .status,
+      0,
+    );
+    const externalBefore = xattr(
+      "-p",
+      "-x",
+      "com.apple.FinderInfo",
+      outside,
+    ).stdout;
+    assert.equal(
+      xattr("-r", "-s", "-d", "com.apple.FinderInfo", app).status,
+      0,
+    );
+    assert.notEqual(xattr("-p", "com.apple.FinderInfo", inside).status, 0);
+    assert.equal(
+      xattr("-p", "-x", "com.apple.FinderInfo", outside).stdout,
+      externalBefore,
+    );
+    assert.equal(
+      xattr("-p", "com.apple.quarantine", inside).stdout.trim(),
+      "0081;00000000;Diagnostic;",
+    );
+    assert.equal(await readFile(inside, "utf8"), "synthetic app data");
+    assert.equal(await readFile(outside, "utf8"), "synthetic external data");
+  },
+);
