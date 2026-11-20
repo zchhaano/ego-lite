@@ -72,6 +72,7 @@ import { pageActionabilityCase } from "./page-actionability.mjs";
 import { pageEvaluateTimeoutCase } from "./page-evaluate-timeout.mjs";
 import {
   pagePendingNavigationCase,
+  pagePendingNavigationEvaluateScreenshotCase,
   pagePendingNavigationFreshProcessCase,
 } from "./page-pending-navigation.mjs";
 import {
@@ -244,6 +245,11 @@ export const e2eCases = [
   {
     name: "Page pending navigation: fresh process",
     body: pagePendingNavigationFreshProcessCase,
+    timeoutMs: 60_000,
+  },
+  {
+    name: "Page pending navigation: evaluate and screenshot",
+    body: pagePendingNavigationEvaluateScreenshotCase,
     timeoutMs: 60_000,
   },
   {
